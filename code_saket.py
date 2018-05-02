@@ -1,11 +1,10 @@
-## Model for ticket best value prediction
-
 import pandas as pd
 import numpy as np
 import requests
 import json
 import os    
 from datetime import datetime
+import matplotlib.pyplot as plt
 os.chdir('/Users/saketguddeti/Desktop/git/Sports-Ticket-Resale-Pricing')
 
 #########################
@@ -91,20 +90,44 @@ listing_giants2['Time_Of_Day'] = np.where(listing_giants2['Time_Of_Day'].isin([1
 
 
 # Zone Importance
-zone_imp = listing_giants2.groupby(['zoneId'])['Listing_Price'].median().reset_index()
-zone_imp.columns = ['zoneId','ZoneImp']
-listing_giants2 = pd.merge(left=listing_giants2,right=zone_imp,how='left',on='zoneId')
+zone_imp = listing_giants2.groupby(['zoneId','zoneName'])['Listing_Price'].median().reset_index()
+zone_imp.columns = ['zoneId','zoneName','ZoneImp']
+listing_giants2 = pd.merge(left=listing_giants2,
+                           right=zone_imp.loc[:,zone_imp.columns!='zoneName'],
+                           how='left',
+                           on='zoneId')
 listing_giants2 = listing_giants2.loc[pd.notnull(listing_giants2['ZoneImp'])]
 
 # Section Importance
-sec_imp = listing_giants2.groupby(['sectionId'])['Listing_Price'].median().reset_index()
-sec_imp.columns = ['sectionId','secImp']
-listing_giants2 = pd.merge(left=listing_giants2,right=sec_imp,how='left',on='sectionId')
+sec_imp = listing_giants2.groupby(['sectionId','sectionName'])['Listing_Price'].median().reset_index()
+sec_imp.columns = ['sectionId','sectionName','secImp']
+listing_giants2 = pd.merge(left=listing_giants2,
+                           right=sec_imp.loc[:,sec_imp.columns!='sectionName'],
+                           how='left',
+                           on='sectionId')
 listing_giants2 = listing_giants2.loc[pd.notnull(listing_giants2['secImp'])]
 
 # Available Listings
-avail_listings = listing_giants2.groupby(['eventID','zoneId']).size().reset_index(name = 'Total_Listings')
-listing_giants2 = pd.merge(left=listing_giants2,right=avail_listings,how='left',on=['eventID','zoneId'])
+zone_info = pd.DataFrame()
+for n,i in enumerate(list(data_giants['id'])):
+    print("Appended "+str(n+1)+" out of "+str(len(data_giants['id'])))
+    for j in list(set(listing_giants2.zoneId)):
+        try:
+            endpoint = "/search/inventory/v2/?eventId=%i&zoneIdList=%i&zoneStats=true" % (i, j)
+            url = "%s%s" % (host, endpoint)
+            r = requests.get(url, headers=headers)
+            json_obj = r.json()
+            zone_data = pd.DataFrame({'Total_Tickets': [json_obj['totalTickets']],
+                                      'Total_Listings': [json_obj['totalListings']],
+                                      'Avg_Price': [json_obj['pricingSummary']['averageTicketPrice']],
+                                      'zoneId': [j],
+                                      'eventID':[i]})
+            zone_info = pd.concat([zone_info, zone_data], axis = 0)
+        except:
+            print("Skipping")
+            continue
+
+listing_giants2 = pd.merge(left=listing_giants2,right=zone_info,how='left',on=['eventID','zoneId'])
 
 total_cap = listing_giants2[['zoneId','row','seatNumbers','quantity']].drop_duplicates()
 total_cap = total_cap.groupby('zoneId').quantity.sum().reset_index(name = 'Total_Capacity')
@@ -112,10 +135,9 @@ listing_giants2 = pd.merge(left=listing_giants2,right=total_cap,how='left',on='z
 
 listing_giants2['availIndex'] = 100 * listing_giants2['Total_Listings'] / listing_giants2['Total_Capacity']
 
-listing_giants2.to_csv('listing_giants.csv', index = False)
 
 X = listing_giants2[['Listing_Price','DTG','Day_Of_Week','Time_Of_Day','ZoneImp',
-                     'gameImp','secImp']]
+                     'gameImp','secImp','Avg_Price','Total_Tickets']]
 y = listing_giants2.value
 
 # Encoding Time_Of_Day variable
@@ -157,13 +179,12 @@ regressor_cv.fit(X_train, y_train)
 print("Tuned Decision Tree Regressor Parameters: {}".format(regressor_cv.best_params_)) 
 print("Best score is {}".format(regressor_cv.best_score_))
 
-regression_tree = DecisionTreeRegressor(max_depth=20,min_samples_split=32,min_samples_leaf=2,random_state=2)
-regression_tree.fit(X_train,y_train)
 
+regression_tree = DecisionTreeRegressor(max_depth=20,min_samples_split=28,min_samples_leaf=2,random_state=2)
+regression_tree.fit(X_train,y_train)
 from sklearn.metrics import r2_score, median_absolute_error, mean_squared_error
 y_pred = regression_tree.predict(X_test)
 y_pred_train = regression_tree.predict(X_train)
-
 print("R-Squared value for Train: {}, Test: {}".format(r2_score(y_train, y_pred_train), 
       r2_score(y_test, y_pred)))
 
@@ -192,14 +213,100 @@ xx = pd.DataFrame({'Listing_Price':[80.0],
                    'Weekday':[0],
                    'Weekend':[1]})
 
-X_train.iloc[0,:] = [140,32,95,531.84,99.5,0,1,1,0]
-x = X_train.head(1)
-regression_tree.predict(X_train)
 
-
-
-x = listing_giants2.loc[(listing_giants2['eventID'] == 103233999) &
+x = listing_giants2.loc[(listing_giants2['eventID'] == 103234019) &
                         (listing_giants2['sectionName'] == 'Club Level Infield 211')]
 
-X_train.loc[X_train.index == 69056]
-y_pred_train.loc[y_pred_train.index == 69056]
+X_train.loc[X_train.index == 37071]
+
+
+b_val = []
+for i in np.arange(20,60,2):
+    X_train.iloc[0,:] = [i,13,95,462.76,99,62.16,397,0,1,1,0]
+    b_val.append(regression_tree.predict(X_train)[0])
+
+plt.plot(np.arange(20,60,2), b_val)
+
+
+
+b_val = []
+for i in np.arange(50,0,-2):
+    X_train.iloc[0,:] = [40,i,95,462.76,99,62.16,397,0,1,1,0]
+    b_val.append(regression_tree.predict(X_train)[0])
+
+plt.plot(np.arange(50,0,-2), b_val)
+
+
+## Distribution of best value sells using sales data
+x = pd.read_excel('Sales Data.xlsx', None)
+sale_data = pd.concat(x).reset_index(drop = True)
+
+sale_data['zoneName'] = sale_data['sectionName'].apply(lambda x: x[:(len(x)-4)])
+sale_data['DTG'] = (sale_data.Event_Date - sale_data.Date_Sold).apply(lambda x: x.days)
+
+sale_data = pd.merge(left = sale_data, right = sec_imp, how = 'left', on = 'sectionName')
+sale_data = pd.merge(left = sale_data, right = zone_imp, how = 'left', on = 'zoneName')
+sale_data = sale_data.loc[(pd.notnull(sale_data['sectionId'])) & (pd.notnull(sale_data['zoneId']))]
+
+sale_data['Home_Team'] = 'San Francisco Giants'
+sale_data = pd.merge(left=sale_data,right=fan_index,how='left',left_on='Away_Team',right_on='Team')
+sale_data = pd.merge(left=sale_data,right=fan_index,how='left',left_on='Home_Team',right_on='Team')
+sale_data['gameImp'] = sale_data['Fans_x'] + sale_data['Fans_y']
+sale_data = sale_data.drop(['Fans_x','Fans_y','Team_x','Team_y'], axis = 1)
+
+from sklearn.tree import DecisionTreeRegressor
+lr = DecisionTreeRegressor(min_samples_split = 25, max_depth = 15, min_samples_leaf = 2)
+lr_data = listing_giants2[['DTG','gameImp','Avg_Price','ZoneImp','secImp']].drop_duplicates()
+lr_data_X = lr_data.drop(['Avg_Price'], axis = 1)
+lr_data_y = lr_data.Avg_Price
+X_train, X_test, y_train, y_test = train_test_split(lr_data_X, lr_data_y, test_size = 0.2, random_state = 55)
+lr.fit(X_train, y_train)
+y_pred = lr.predict(X_test)
+y_pred_train = lr.predict(X_train)
+pd.DataFrame(list(zip(y_pred, y_test)))
+r2_score(y_test, y_pred)
+r2_score(y_train, y_pred_train)
+
+sale_data['Avg_Price'] = lr.predict(sale_data[['DTG','gameImp','ZoneImp','secImp']])
+
+lr = DecisionTreeRegressor(min_samples_split = 25, max_depth = 15, min_samples_leaf = 2)
+lr_data = listing_giants2[['DTG','gameImp','Total_Tickets','ZoneImp','secImp']].drop_duplicates()
+lr_data_X = lr_data.drop(['Total_Tickets'], axis = 1)
+lr_data_y = lr_data.Total_Tickets
+X_train, X_test, y_train, y_test = train_test_split(lr_data_X, lr_data_y, test_size = 0.2, random_state = 55)
+lr.fit(X_train, y_train)
+y_pred = lr.predict(X_test)
+y_pred_train = lr.predict(X_train)
+pd.DataFrame(list(zip(y_pred, y_test)))
+r2_score(y_test, y_pred)
+r2_score(y_train, y_pred_train)
+
+sale_data['Total_Tickets'] = lr.predict(sale_data[['DTG','gameImp','ZoneImp','secImp']])
+
+sale_data['Day_Of_Week'] = sale_data['Event_Date'].apply(lambda x: x.weekday()).map(
+        {0:'Weekday',
+         1:'Weekday',
+         2:'Weekday',
+         3:'Weekday',
+         4:'Weekday',
+         5:'Weekend',
+         6:'Weekend'})
+sale_data['Time_Of_Day'] = sale_data['Event_Date'].apply(lambda x: x.hour)
+sale_data['Time_Of_Day'] = np.where(sale_data['Time_Of_Day'].isin([12,13]), 'Lunch-Time', 'Prime-Time')
+
+sale_data2 = sale_data[['Sale_Price','DTG','Day_Of_Week','Time_Of_Day','ZoneImp',
+                     'gameImp','secImp','Avg_Price','Total_Tickets']]
+
+DUMMY = pd.get_dummies(sale_data2['Day_Of_Week'])
+sale_data2 = pd.concat([sale_data2, DUMMY], axis = 1)
+DUMMY = pd.get_dummies(sale_data2['Time_Of_Day'])
+sale_data2 = pd.concat([sale_data2, DUMMY], axis = 1)
+sale_data2 = sale_data2.drop(['Time_Of_Day','Day_Of_Week'], axis = 1)
+
+sale_data2.columns = ['Listing_Price', 'DTG', 'ZoneImp', 'gameImp', 'secImp', 'Avg_Price',
+       'Total_Tickets','Weekday', 'Weekend', 'Lunch-Time', 'Prime-Time']
+
+sale_data['value'] = regression_tree.predict(sale_data2)
+plt.hist(sale_data['value'], 20, normed=1, facecolor='green', alpha=0.75)
+
+plt.scatter(sale_data['DTG'], sale_data['value'], s=20, alpha=0.3)
